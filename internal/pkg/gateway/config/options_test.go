@@ -4,7 +4,7 @@ Copyright IBM Corp. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
-package gateway
+package config
 
 import (
 	"bytes"
@@ -20,6 +20,7 @@ peer:
   gateway:
     enabled: true
     endorsementTimeout: 30s
+    dialTimeout: 2m
 `)
 
 func TestDefaultOptions(t *testing.T) {
@@ -37,6 +38,7 @@ func TestOverriddenOptions(t *testing.T) {
 	expectedOptions := Options{
 		Enabled:            true,
 		EndorsementTimeout: 30 * time.Second,
+		DialTimeout:        2 * time.Minute,
 	}
 	require.Equal(t, expectedOptions, options)
 }

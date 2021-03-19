@@ -7,45 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 package mgmt
 
 import (
-	"reflect"
 	"sync"
 
 	"github.com/hyperledger/fabric/bccsp"
-	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/msp/cache"
-	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 )
-
-// LoadLocalMspWithType loads the local MSP with the specified type from the specified directory
-func LoadLocalMspWithType(dir string, bccspConfig *factory.FactoryOpts, mspID, mspType string) error {
-	if mspID == "" {
-		return errors.New("the local MSP must have an ID")
-	}
-
-	conf, err := msp.GetLocalMspConfigWithType(dir, bccspConfig, mspID, mspType)
-	if err != nil {
-		return err
-	}
-
-	return GetLocalMSP(factory.GetDefault()).Setup(conf)
-}
-
-// LoadLocalMsp loads the local MSP from the specified directory
-func LoadLocalMsp(dir string, bccspConfig *factory.FactoryOpts, mspID string) error {
-	if mspID == "" {
-		return errors.New("the local MSP must have an ID")
-	}
-
-	conf, err := msp.GetLocalMspConfig(dir, bccspConfig, mspID)
-	if err != nil {
-		return err
-	}
-
-	return GetLocalMSP(factory.GetDefault()).Setup(conf)
-}
 
 // FIXME: AS SOON AS THE CHAIN MANAGEMENT CODE IS COMPLETE,
 // THESE MAPS AND HELPER FUNCTIONS SHOULD DISAPPEAR BECAUSE
@@ -64,23 +33,6 @@ var (
 // exists or not
 type mspMgmtMgr struct {
 	msp.MSPManager
-	// track whether this MSPManager has been setup successfully
-	up bool
-}
-
-func (mgr *mspMgmtMgr) DeserializeIdentity(serializedIdentity []byte) (msp.Identity, error) {
-	if !mgr.up {
-		return nil, errors.New("channel doesn't exist")
-	}
-	return mgr.MSPManager.DeserializeIdentity(serializedIdentity)
-}
-
-func (mgr *mspMgmtMgr) Setup(msps []msp.MSP) error {
-	err := mgr.MSPManager.Setup(msps)
-	if err == nil {
-		mgr.up = true
-	}
-	return err
 }
 
 // GetManagerForChain returns the msp manager for the supplied
@@ -92,18 +44,9 @@ func GetManagerForChain(chainID string) msp.MSPManager {
 	mspMgr, ok := mspMap[chainID]
 	if !ok {
 		mspLogger.Debugf("Created new msp manager for channel `%s`", chainID)
-		mspMgmtMgr := &mspMgmtMgr{msp.NewMSPManager(), false}
+		mspMgmtMgr := &mspMgmtMgr{msp.NewMSPManager()}
 		mspMap[chainID] = mspMgmtMgr
 		mspMgr = mspMgmtMgr
-	} else {
-		// check for internal mspManagerImpl and mspMgmtMgr types. if a different
-		// type is found, it's because a developer has added a new type that
-		// implements the MSPManager interface and should add a case to the logic
-		// above to handle it.
-		if !(reflect.TypeOf(mspMgr).Elem().Name() == "mspManagerImpl" || reflect.TypeOf(mspMgr).Elem().Name() == "mspMgmtMgr") {
-			panic("Found unexpected MSPManager type.")
-		}
-		mspLogger.Debugf("Returning existing manager for channel '%s'", chainID)
 	}
 	return mspMgr
 }
@@ -129,7 +72,7 @@ func XXXSetMSPManager(chainID string, manager msp.MSPManager) {
 	m.Lock()
 	defer m.Unlock()
 
-	mspMap[chainID] = &mspMgmtMgr{manager, true}
+	mspMap[chainID] = &mspMgmtMgr{manager}
 }
 
 // GetLocalMSP returns the local msp (and creates it if it doesn't exist)
@@ -186,14 +129,4 @@ func GetIdentityDeserializer(chainID string, cryptoProvider bccsp.BCCSP) msp.Ide
 	}
 
 	return GetManagerForChain(chainID)
-}
-
-// GetLocalSigningIdentityOrPanic returns the local signing identity or panic in case
-// or error
-func GetLocalSigningIdentityOrPanic(cryptoProvider bccsp.BCCSP) msp.SigningIdentity {
-	id, err := GetLocalMSP(cryptoProvider).GetDefaultSigningIdentity()
-	if err != nil {
-		mspLogger.Panicf("Failed getting local signing identity [%+v]", err)
-	}
-	return id
 }

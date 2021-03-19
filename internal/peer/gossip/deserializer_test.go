@@ -4,7 +4,7 @@ Copyright IBM Corp. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
-package mgmt
+package gossip
 
 import (
 	"fmt"
@@ -15,22 +15,24 @@ import (
 	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/msp"
+	"github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewDeserializersManager(t *testing.T) {
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	require.NoError(t, err)
-	require.NotNil(t, NewDeserializersManager(cryptoProvider))
+	require.NotNil(t, NewDeserializersManager(mgmt.GetLocalMSP(cryptoProvider)))
 }
 
 func TestMspDeserializersManager_Deserialize(t *testing.T) {
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	require.NoError(t, err)
 
-	m := NewDeserializersManager(cryptoProvider)
+	localMSP := mgmt.GetLocalMSP(cryptoProvider)
+	m := NewDeserializersManager(localMSP)
 
-	i, err := GetLocalMSP(cryptoProvider).GetDefaultSigningIdentity()
+	i, err := localMSP.GetDefaultSigningIdentity()
 	require.NoError(t, err)
 	raw, err := i.Serialize()
 	require.NoError(t, err)
@@ -46,7 +48,7 @@ func TestMspDeserializersManager_GetChannelDeserializers(t *testing.T) {
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	require.NoError(t, err)
 
-	m := NewDeserializersManager(cryptoProvider)
+	m := NewDeserializersManager(mgmt.GetLocalMSP(cryptoProvider))
 
 	deserializers := m.GetChannelDeserializers()
 	require.NotNil(t, deserializers)
@@ -56,9 +58,10 @@ func TestMspDeserializersManager_GetLocalDeserializer(t *testing.T) {
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	require.NoError(t, err)
 
-	m := NewDeserializersManager(cryptoProvider)
+	localMSP := mgmt.GetLocalMSP(cryptoProvider)
+	m := NewDeserializersManager(localMSP)
 
-	i, err := GetLocalMSP(cryptoProvider).GetDefaultSigningIdentity()
+	i, err := localMSP.GetDefaultSigningIdentity()
 	require.NoError(t, err)
 	raw, err := i.Serialize()
 	require.NoError(t, err)
@@ -80,13 +83,13 @@ func TestMain(m *testing.M) {
 
 	cryptoProvider := factory.GetDefault()
 
-	err = GetLocalMSP(cryptoProvider).Setup(testConf)
+	err = mgmt.GetLocalMSP(cryptoProvider).Setup(testConf)
 	if err != nil {
 		fmt.Printf("Setup for msp should have succeeded, got err %s instead", err)
 		os.Exit(-1)
 	}
 
-	XXXSetMSPManager("foo", msp.NewMSPManager())
+	mgmt.XXXSetMSPManager("foo", msp.NewMSPManager())
 	retVal := m.Run()
 	os.Exit(retVal)
 }

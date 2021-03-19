@@ -31,7 +31,6 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/ledgermgmt"
 	"github.com/hyperledger/fabric/core/ledger/ledgermgmt/ledgermgmttest"
 	"github.com/hyperledger/fabric/core/peer"
-	"github.com/hyperledger/fabric/core/policy"
 	"github.com/hyperledger/fabric/core/scc/cscc/mocks"
 	"github.com/hyperledger/fabric/core/transientstore"
 	"github.com/hyperledger/fabric/gossip/gossip"
@@ -65,12 +64,6 @@ type chaincodeStub interface {
 
 type channelPolicyManagerGetter interface {
 	policies.ChannelPolicyManagerGetter
-}
-
-//go:generate counterfeiter -o mocks/policy_checker.go --fake-name PolicyChecker . policyChecker
-
-type policyChecker interface {
-	policy.PolicyChecker
 }
 
 //go:generate counterfeiter -o mocks/store_provider.go --fake-name StoreProvider . storeProvider
@@ -572,10 +565,18 @@ func newPeerConfiger(t *testing.T, ledgerMgr *ledgermgmt.LedgerMgr, grpcServer *
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	require.NoError(t, err)
 
-	signer := mgmt.GetLocalSigningIdentityOrPanic(cryptoProvider)
+	localMSP := mgmt.GetLocalMSP(cryptoProvider)
+	signer, err := localMSP.GetDefaultSigningIdentity()
+	require.NoError(t, err)
+	deserManager := peergossip.NewDeserializersManager(localMSP)
 
-	messageCryptoService := peergossip.NewMCS(&mocks.ChannelPolicyManagerGetter{}, signer, mgmt.NewDeserializersManager(cryptoProvider), cryptoProvider)
-	secAdv := peergossip.NewSecurityAdvisor(mgmt.NewDeserializersManager(cryptoProvider))
+	messageCryptoService := peergossip.NewMCS(
+		&mocks.ChannelPolicyManagerGetter{},
+		signer,
+		deserManager,
+		cryptoProvider,
+	)
+	secAdv := peergossip.NewSecurityAdvisor(deserManager)
 	defaultSecureDialOpts := func() []grpc.DialOption {
 		return []grpc.DialOption{grpc.WithInsecure()}
 	}
@@ -604,8 +605,7 @@ func newPeerConfiger(t *testing.T, ledgerMgr *ledgermgmt.LedgerMgr, grpcServer *
 	// setup cscc instance
 	mockACLProvider := &mocks.ACLProvider{}
 	cscc := &PeerConfiger{
-		policyChecker: &mocks.PolicyChecker{},
-		aclProvider:   mockACLProvider,
+		aclProvider: mockACLProvider,
 		peer: &peer.Peer{
 			StoreProvider:  &mocks.StoreProvider{},
 			GossipService:  gossipService,

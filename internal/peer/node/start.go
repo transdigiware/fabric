@@ -213,10 +213,6 @@ func serve(args []string) error {
 
 	platformRegistry := platforms.NewRegistry(platforms.SupportedPlatforms...)
 
-	identityDeserializerFactory := func(chainID string) msp.IdentityDeserializer {
-		return mgmt.GetManagerForChain(chainID)
-	}
-
 	opsSystem := newOperationsSystem(coreConfig)
 	err = opsSystem.Start()
 	if err != nil {
@@ -227,10 +223,6 @@ func serve(args []string) error {
 	metricsProvider := opsSystem.Provider
 	logObserver := floggingmetrics.NewObserver(metricsProvider)
 	flogging.SetObserver(logObserver)
-
-	mspID := coreConfig.LocalMSPID
-
-	membershipInfoProvider := privdata.NewMembershipInfoProvider(mspID, createSelfSignedData(), identityDeserializerFactory)
 
 	chaincodeInstallPath := filepath.Join(coreconfig.GetPath("peer.fileSystemPath"), "lifecycle", "chaincodes")
 	ccStore := persistence.NewStore(chaincodeInstallPath)
@@ -298,16 +290,30 @@ func serve(args []string) error {
 		OrdererEndpointOverrides: deliverServiceConfig.OrdererEndpointOverrides,
 	}
 
+	identityDeserializerFactory := func(channelName string) msp.IdentityDeserializer {
+		if channel := peerInstance.Channel(channelName); channel != nil {
+			return channel.MSPManager()
+		}
+		return nil
+	}
+
+	mspID := coreConfig.LocalMSPID
 	localMSP := mgmt.GetLocalMSP(factory.GetDefault())
+
 	signingIdentity, err := localMSP.GetDefaultSigningIdentity()
 	if err != nil {
 		logger.Panicf("Could not get the default signing identity from the local MSP: [%+v]", err)
 	}
-
 	signingIdentityBytes, err := signingIdentity.Serialize()
 	if err != nil {
 		logger.Panicf("Failed to serialize the signing identity: %v", err)
 	}
+
+	membershipInfoProvider := privdata.NewMembershipInfoProvider(
+		mspID,
+		createSelfSignedData(signingIdentity),
+		identityDeserializerFactory,
+	)
 
 	expirationLogger := flogging.MustGetLogger("certmonitor")
 	crypto.TrackExpiration(
@@ -326,7 +332,6 @@ func serve(args []string) error {
 	policyChecker := policy.NewPolicyChecker(
 		policies.PolicyManagerGetterFunc(peerInstance.GetPolicyManager),
 		mgmt.GetLocalMSP(factory.GetDefault()),
-		mgmt.NewLocalMSPPrincipalGetter(factory.GetDefault()),
 	)
 
 	// startup aclmgmt with default ACL providers (resource based and default 1.0 policies based).
@@ -591,12 +596,15 @@ func serve(args []string) error {
 	lsccInst := &lscc.SCC{
 		BuiltinSCCs: builtinSCCs,
 		Support: &lscc.SupportImpl{
-			GetMSPIDs: peerInstance.GetMSPIDs,
+			GetMSPIDs:               peerInstance.GetMSPIDs,
+			GetIdentityDeserializer: identityDeserializerFactory,
 		},
-		SCCProvider:        &lscc.PeerShim{Peer: peerInstance},
-		ACLProvider:        aclProvider,
-		GetMSPIDs:          peerInstance.GetMSPIDs,
-		PolicyChecker:      policyChecker,
+		SCCProvider: &lscc.PeerShim{Peer: peerInstance},
+		ACLProvider: aclProvider,
+		GetMSPIDs:   peerInstance.GetMSPIDs,
+		GetMSPManager: func(channelName string) msp.MSPManager {
+			return peerInstance.Channel(channelName).MSPManager()
+		},
 		BCCSP:              factory.GetDefault(),
 		BuildRegistry:      buildRegistry,
 		ChaincodeBuilder:   containerRouter,
@@ -686,7 +694,6 @@ func serve(args []string) error {
 		lifecycleValidatorCommitter,
 		lsccInst,
 		lifecycleValidatorCommitter,
-		policyChecker,
 		peerInstance,
 		factory.GetDefault(),
 	)
@@ -818,7 +825,11 @@ func serve(args []string) error {
 				gateway.CreateServer(
 					&gateway.EndorserServerAdapter{Server: serverEndorser},
 					discoveryService,
+					&gateway.PeerNotifierAdapter{
+						Peer: peerInstance,
+					},
 					peerInstance.GossipService.SelfMembershipInfo().Endpoint,
+					coreConfig.LocalMSPID,
 					coreConfig.GatewayOptions,
 				),
 			)
@@ -929,8 +940,7 @@ func localPolicy(policyObject proto.Message) policies.Policy {
 	return policy
 }
 
-func createSelfSignedData() protoutil.SignedData {
-	sID := mgmt.GetLocalSigningIdentityOrPanic(factory.GetDefault())
+func createSelfSignedData(sID msp.SigningIdentity) protoutil.SignedData {
 	msg := make([]byte, 32)
 	sig, err := sID.Sign(msg)
 	if err != nil {
@@ -1191,13 +1201,15 @@ func initGossipService(
 		certs.TLSClientCert.Store(&clientCert)
 	}
 
+	localMSP := mgmt.GetLocalMSP(factory.GetDefault())
+	deserManager := peergossip.NewDeserializersManager(localMSP)
 	messageCryptoService := peergossip.NewMCS(
 		policyMgr,
 		signer,
-		mgmt.NewDeserializersManager(factory.GetDefault()),
+		deserManager,
 		factory.GetDefault(),
 	)
-	secAdv := peergossip.NewSecurityAdvisor(mgmt.NewDeserializersManager(factory.GetDefault()))
+	secAdv := peergossip.NewSecurityAdvisor(deserManager)
 	bootstrap := viper.GetStringSlice("peer.gossip.bootstrap")
 
 	serviceConfig := gossipservice.GlobalConfig()
